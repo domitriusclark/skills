@@ -1,0 +1,437 @@
+#!/usr/bin/env python3
+"""Validate, safely repair, and review the personal orchestration rollout."""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import os
+from pathlib import Path
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+import tomllib
+
+
+HOME = Path.home()
+ROOT = HOME / ".config" / "agent-orchestration"
+POLICY = ROOT / "policy.md"
+STATE_DIR = HOME / ".local" / "state" / "agent-orchestration"
+CACHE_DIR = HOME / ".cache" / "agent-orchestration"
+EVENTS = STATE_DIR / "events.jsonl"
+HEALTH = CACHE_DIR / "health.json"
+# Routing constants. Change these together with policy.md and the templates.
+CLAUDE_MANAGER = "claude-fable-5-1"
+CLAUDE_TASTE = "claude-opus-5-5"
+CODEX_DEFAULT_MODEL = "gpt-6-astra"
+CODEX_LIGHT_MODEL = "gpt-5.6-terra"
+CODEX_FALLBACK_MODEL = "gpt-5.6-sol"
+CODEX_ALLOWED_DEFAULT_EFFORTS = {"medium", "high"}
+
+BEGIN = "<!-- BEGIN MANAGED ORCHESTRATION -->"
+END = "<!-- END MANAGED ORCHESTRATION -->"
+
+BLOCK_TARGETS = [
+    HOME / ".codex" / "AGENTS.md",
+    HOME / ".claude" / "CLAUDE.md",
+]
+
+PROFILE_TARGETS = {
+    ROOT / "templates" / "codex" / "scout.toml":
+        HOME / ".codex" / "agents" / "scout.toml",
+    ROOT / "templates" / "codex" / "worker.toml":
+        HOME / ".codex" / "agents" / "worker.toml",
+    ROOT / "templates" / "codex" / "heavy-worker.toml":
+        HOME / ".codex" / "agents" / "heavy-worker.toml",
+    ROOT / "templates" / "codex" / "reviewer.toml":
+        HOME / ".codex" / "agents" / "reviewer.toml",
+    ROOT / "templates" / "claude" / "opus-specialist.md":
+        HOME / ".claude" / "agents" / "opus-specialist.md",
+    ROOT / "templates" / "claude" / "critical-reviewer.md":
+        HOME / ".claude" / "agents" / "critical-reviewer.md",
+}
+
+
+def utc_now() -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc)
+
+
+def atomic_write(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644
+    if path.exists():
+        stamp = utc_now().strftime("%Y%m%dT%H%M%SZ")
+        backup_dir = ROOT / "backups" / "auto"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        relative_name = str(path.relative_to(HOME)).replace("/", "__")
+        shutil.copy2(path, backup_dir / f"{relative_name}.{stamp}.bak")
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=path.parent, delete=False
+    ) as handle:
+        handle.write(content)
+        temp_path = Path(handle.name)
+    os.chmod(temp_path, mode)
+    os.replace(temp_path, path)
+
+
+def extract_block(content: str) -> str | None:
+    start = content.find(BEGIN)
+    finish = content.find(END)
+    if start < 0 or finish < start:
+        return None
+    finish += len(END)
+    return content[start:finish]
+
+
+def replace_block(content: str, canonical: str) -> str:
+    current = extract_block(content)
+    if current is None:
+        separator = "" if not content or content.endswith("\n\n") else "\n\n"
+        return f"{content}{separator}{canonical}\n"
+    return content.replace(current, canonical, 1)
+
+
+def load_toml(path: Path, problems: list[str]) -> dict:
+    try:
+        with path.open("rb") as handle:
+            return tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        problems.append(f"invalid TOML: {path}: {exc}")
+        return {}
+
+
+def validate_claude_agent(path: Path, problems: list[str]) -> None:
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        problems.append(f"unreadable Claude profile: {path}: {exc}")
+        return
+    if not content.startswith("---\n") or "\n---\n" not in content[4:]:
+        problems.append(f"invalid Claude profile frontmatter: {path}")
+    for required in ("name:", "description:", "model:", "effort:"):
+        if required not in content:
+            problems.append(f"missing {required[:-1]} in Claude profile: {path}")
+
+
+def validate_runtime_configs(problems: list[str]) -> None:
+    codex = load_toml(HOME / ".codex" / "config.toml", problems)
+    if codex.get("model") != CODEX_DEFAULT_MODEL:
+        problems.append(
+            f"Codex config expected model={CODEX_DEFAULT_MODEL!r}, "
+            f"got {codex.get('model')!r}"
+        )
+    effort = codex.get("model_reasoning_effort")
+    if effort not in CODEX_ALLOWED_DEFAULT_EFFORTS:
+        problems.append(
+            "Codex config model_reasoning_effort should be one of "
+            f"{sorted(CODEX_ALLOWED_DEFAULT_EFFORTS)}, got {effort!r}"
+        )
+
+
+
+def run_probe(command: list[str], marker: str) -> tuple[bool, str]:
+    # Nested Claude sessions refuse to start while CLAUDECODE is set, so the
+    # probe runs with a clean environment.
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+    try:
+        result = subprocess.run(
+            command,
+            input=f"Reply with exactly: {marker}\n",
+            text=True,
+            capture_output=True,
+            timeout=150,
+            check=False,
+            env=env,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, str(exc)
+    combined = f"{result.stdout}\n{result.stderr}"
+    return result.returncode == 0 and marker in combined, combined[-500:]
+
+
+def probe_models(problems: list[str], notes: list[str]) -> None:
+    bundled = Path("/Applications/ChatGPT.app/Contents/Resources/codex")
+    codex = str(bundled) if bundled.exists() else shutil.which("codex")
+    path_codex = shutil.which("codex")
+    claude = shutil.which("claude")
+    def codex_probe(binary: str, model: str, marker: str) -> tuple[bool, str]:
+        return run_probe(
+            [
+                binary,
+                "exec",
+                "--ephemeral",
+                "--skip-git-repo-check",
+                "--model",
+                model,
+                "-c",
+                'model_reasoning_effort="low"',
+                "--sandbox",
+                "read-only",
+                "-",
+            ],
+            marker,
+        )
+
+    def claude_probe(binary: str, model: str, marker: str) -> tuple[bool, str]:
+        return run_probe(
+            [
+                binary,
+                "-p",
+                "--model",
+                model,
+                "--effort",
+                "high",
+                "--tools",
+                "",
+                "--permission-mode",
+                "dontAsk",
+            ],
+            marker,
+        )
+
+    if not codex:
+        problems.append("Codex executable not found for model probe")
+    else:
+        for model, label in (
+            (CODEX_DEFAULT_MODEL, "Astra heavy-worker/reviewer"),
+            (CODEX_LIGHT_MODEL, "Terra scout/worker"),
+            (CODEX_FALLBACK_MODEL, "Sol fallback"),
+        ):
+            ok, detail = codex_probe(codex, model, f"{model}_OK")
+            if ok:
+                notes.append(f"{label} probe passed ({model})")
+            else:
+                problems.append(f"{label} probe failed ({model}): {detail}")
+
+    if path_codex and path_codex != codex:
+        ok, detail = codex_probe(path_codex, CODEX_DEFAULT_MODEL, "PATH_OK")
+        if ok:
+            notes.append("PATH Codex bridge probe passed")
+        else:
+            problems.append(
+                "PATH Codex bridge probe failed; Claude's Codex plugin may not "
+                f"reach {CODEX_DEFAULT_MODEL}: {detail}"
+            )
+
+    if not claude:
+        problems.append("Claude executable not found for model probe")
+    else:
+        for model, label in (
+            (CLAUDE_MANAGER, "Fable 5.1 manager/reviewer"),
+            (CLAUDE_TASTE, "Opus 5 taste-specialist"),
+        ):
+            ok, detail = claude_probe(claude, model, f"{model}_OK")
+            if ok:
+                notes.append(f"{label} probe passed ({model})")
+            else:
+                problems.append(f"{label} probe failed ({model}): {detail}")
+
+
+def doctor(args: argparse.Namespace) -> int:
+    problems: list[str] = []
+    repaired: list[str] = []
+    notes: list[str] = []
+
+    try:
+        canonical = POLICY.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        problems.append(f"canonical policy unavailable: {exc}")
+        canonical = ""
+
+    if canonical and extract_block(canonical) != canonical:
+        problems.append("canonical policy does not contain exactly one managed block")
+
+    for target in BLOCK_TARGETS:
+        try:
+            content = target.read_text(encoding="utf-8")
+        except OSError as exc:
+            problems.append(f"unreadable global instruction file: {target}: {exc}")
+            continue
+        if canonical and extract_block(content) != canonical:
+            if args.repair:
+                atomic_write(target, replace_block(content, canonical))
+                repaired.append(str(target))
+            else:
+                problems.append(f"managed policy drift: {target}")
+
+    for source, target in PROFILE_TARGETS.items():
+        try:
+            expected = source.read_text(encoding="utf-8")
+        except OSError as exc:
+            problems.append(f"canonical profile unavailable: {source}: {exc}")
+            continue
+        try:
+            actual = target.read_text(encoding="utf-8")
+        except OSError:
+            actual = ""
+        if actual != expected:
+            if args.repair:
+                atomic_write(target, expected)
+                repaired.append(str(target))
+            else:
+                problems.append(f"managed profile drift: {target}")
+
+    for target in PROFILE_TARGETS.values():
+        if target.suffix == ".toml":
+            load_toml(target, problems)
+        else:
+            validate_claude_agent(target, problems)
+
+    validate_runtime_configs(problems)
+    if args.probe:
+        probe_models(problems, notes)
+
+    status = "healthy"
+    if problems:
+        status = "degraded"
+    elif repaired:
+        status = "repaired"
+
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    HEALTH.write_text(
+        json.dumps(
+            {
+                "checked_at": utc_now().isoformat(),
+                "status": status,
+                "repaired": repaired,
+                "problems": problems,
+                "notes": notes,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    if not args.quiet or problems:
+        print(f"orchestration health: {status}")
+        for item in repaired:
+            print(f"repaired: {item}")
+        for item in notes:
+            print(f"ok: {item}")
+        for item in problems:
+            print(f"problem: {item}", file=sys.stderr)
+    return 1 if problems else 0
+
+
+def log_event(args: argparse.Namespace) -> int:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    event = {
+        "timestamp": utc_now().isoformat(),
+        "manager": args.manager,
+        "profile": args.profile,
+        "effort": args.effort,
+        "outcome": args.outcome,
+        "review": args.review,
+        "note": args.note,
+    }
+    with EVENTS.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(event, separators=(",", ":")) + "\n")
+    print("orchestration event recorded")
+    return 0
+
+
+def read_events() -> list[dict]:
+    if not EVENTS.exists():
+        return []
+    events: list[dict] = []
+    for line in EVENTS.read_text(encoding="utf-8").splitlines():
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return events
+
+
+def report(_: argparse.Namespace) -> int:
+    events = read_events()
+    print("Orchestration check-in")
+    print(f"Delegated tasks recorded: {len(events)} / 10")
+    if not events:
+        print("Check-in status: collect evidence")
+        print("Next check-in: after 10 delegated tasks or two weeks")
+        return 0
+
+    counts: dict[str, dict[str, int]] = {}
+    manager_reviews = 0
+    cross_family_reviews = 0
+    for event in events:
+        profile = event.get("profile", "unknown")
+        outcome = event.get("outcome", "unknown")
+        counts.setdefault(profile, {})
+        counts[profile][outcome] = counts[profile].get(outcome, 0) + 1
+        if event.get("review") == "manager":
+            manager_reviews += 1
+        elif event.get("review") == "cross-family":
+            cross_family_reviews += 1
+
+    first = dt.datetime.fromisoformat(events[0]["timestamp"])
+    age = utc_now() - first
+    due = len(events) >= 10 or age >= dt.timedelta(days=14)
+    print(f"Manager reviews recorded: {manager_reviews}")
+    print(f"Cross-family reviews recorded: {cross_family_reviews}")
+    for profile in sorted(counts):
+        outcomes = ", ".join(
+            f"{name}={count}" for name, count in sorted(counts[profile].items())
+        )
+        print(f"{profile}: {outcomes}")
+    print(f"Days since first recorded task: {age.days}")
+    print(f"Check-in status: {'due' if due else 'not due'}")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="orchestratorctl")
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    doctor_parser = commands.add_parser(
+        "doctor", help="validate and optionally repair managed orchestration files"
+    )
+    doctor_parser.add_argument("--repair", action="store_true")
+    doctor_parser.add_argument("--probe", action="store_true")
+    doctor_parser.add_argument("--quiet", action="store_true")
+    doctor_parser.set_defaults(func=doctor)
+
+    log_parser = commands.add_parser(
+        "log", help="record one meaningful delegated task"
+    )
+    log_parser.add_argument(
+        "--manager", required=True, choices=("opus", "fable", "astra", "sol")
+    )
+    log_parser.add_argument(
+        "--profile",
+        required=True,
+        choices=("scout", "worker", "heavy-worker", "taste-specialist", "reviewer"),
+    )
+    log_parser.add_argument(
+        "--effort", required=True, choices=("low", "medium", "high", "xhigh")
+    )
+    log_parser.add_argument(
+        "--outcome",
+        required=True,
+        choices=("success", "retry", "escalated", "blocked"),
+    )
+    log_parser.add_argument(
+        "--review", default="none", choices=("none", "manager", "cross-family")
+    )
+    log_parser.add_argument("--note", default="")
+    log_parser.set_defaults(func=log_event)
+
+    report_parser = commands.add_parser(
+        "report", help="show the 10-task/two-week check-in scorecard"
+    )
+    report_parser.set_defaults(func=report)
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

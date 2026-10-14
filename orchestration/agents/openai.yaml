@@ -1,0 +1,5 @@
+interface:
+  display_name: "Orchestration"
+  short_description: "Install, check, and review agent routing"
+policy:
+  allow_implicit_invocation: false
