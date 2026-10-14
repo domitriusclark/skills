@@ -35,8 +35,10 @@ When one piece of work has two readers, such as a review kit for the user and co
 2. Blocking items come before optional ones. Number them, and show five or fewer.
 3. Test every clause: does this reader need it to act? Cut what they already know. Keep a reason only when they might disagree, or can't see the problem themselves.
 4. Say the concrete thing, not a stand-in word ("load-bearing," "seam," "floor").
-5. Put context and evidence last, after a `---` rule, under a bold one-word label. Five bullets or fewer, and only what the reader lacks.
-6. The last line says what happens next, and what happens if nothing does.
+5. Cut hedges that carry no information ("perhaps," "might," "could possibly"). Keep one that marks real uncertainty; deleting it fakes confidence.
+6. Put context and evidence last, after a `---` rule, under a bold one-word label. Five bullets or fewer, and only what the reader lacks.
+7. The last line says what happens next, and what happens if nothing does.
+8. No greeting, preamble, or pleasantry ("Hey!", "Quick one,", "Hope this helps," "Let me know if..."). Start with the ask. End when it is done.
 
 Formatting by channel:
 
@@ -52,6 +54,8 @@ For each item, delete every clause after the `Fix:`. If the reader could still a
 Too much: `skill.mjs:219`: spawnSync has no timeout, and ctx-generate.yml sets no timeout-minutes, so a hung validator stalls the loop until GitHub's 6-hour limit and the remaining groupings never run. Fix: add a timeout; status then comes back null, which already throws as a retryable tool error.
 
 Right: `skill.mjs:219`: no timeout, so a hung validator stalls Generate for up to 6 hours. Fix: add `timeout: 60_000, killSignal: 'SIGKILL'`.
+
+Then read only the first and last lines. If the reader would not know what to do and what happens next, rewrite those two lines.
 
 ## 5. Corrections stick
 
