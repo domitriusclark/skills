@@ -26,7 +26,7 @@ Run the mode the user named. If they named none, ask: install, doctor, or check-
    cp -R "<skill>/policy.md" "<skill>/check-in.md" "<skill>/templates" ~/.config/agent-orchestration/
    install -m 755 "<skill>/scripts/orchestratorctl" ~/.local/bin/orchestratorctl
    ```
-4. Run `~/.local/bin/orchestratorctl doctor --repair`. It writes the policy between the `MANAGED ORCHESTRATION` markers in both instruction files, appending the block if absent, and installs the agent profiles. Each overwritten file is backed up to `~/.config/agent-orchestration/backups/auto/` under a dot-prefixed name, so list it with `ls -a`. A symlinked `CLAUDE.md` or `AGENTS.md` is replaced by a regular file, leaving the link target untouched; if either is a symlink, tell the user before running this.
+4. Run `~/.local/bin/orchestratorctl doctor --repair`. It writes the policy between the `MANAGED ORCHESTRATION` markers in both instruction files, appending the block if absent, and installs the agent profiles. Each overwritten file is backed up to `~/.config/agent-orchestration/backups/auto/` under a dot-prefixed name, so list it with `ls -a`. A symlinked instruction file is written through, so the link survives.
 5. Report every `repaired:` and `problem:` line.
 
 Done when `doctor` prints `healthy` or `repaired`, or each remaining problem is one the user accepted, such as running without Codex.

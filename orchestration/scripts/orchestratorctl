@@ -60,30 +60,47 @@ def utc_now() -> dt.datetime:
 
 
 def atomic_write(path: Path, content: str) -> None:
+    relative_name = str(path.relative_to(HOME)).replace("/", "__")
+    # Write through symlinks so dotfile-managed instruction files stay linked.
+    # A dangling link is replaced rather than followed.
+    if path.is_symlink() and path.exists():
+        path = path.resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644
-    if path.exists():
-        stamp = utc_now().strftime("%Y%m%dT%H%M%SZ")
-        backup_dir = ROOT / "backups" / "auto"
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        relative_name = str(path.relative_to(HOME)).replace("/", "__")
-        shutil.copy2(path, backup_dir / f"{relative_name}.{stamp}.bak")
     with tempfile.NamedTemporaryFile(
         "w", encoding="utf-8", dir=path.parent, delete=False
     ) as handle:
         handle.write(content)
         temp_path = Path(handle.name)
-    os.chmod(temp_path, mode)
-    os.replace(temp_path, path)
+    try:
+        if path.exists():
+            stamp = utc_now().strftime("%Y%m%dT%H%M%SZ")
+            backup_dir = ROOT / "backups" / "auto"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, backup_dir / f"{relative_name}.{stamp}.bak")
+        os.chmod(temp_path, mode)
+        os.replace(temp_path, path)
+    except BaseException:
+        temp_path.unlink(missing_ok=True)
+        raise
 
 
 def extract_block(content: str) -> str | None:
     start = content.find(BEGIN)
-    finish = content.find(END)
-    if start < 0 or finish < start:
+    if start < 0:
+        return None
+    finish = content.find(END, start)
+    if finish < 0:
         return None
     finish += len(END)
     return content[start:finish]
+
+
+def markers_malformed(content: str) -> bool:
+    begins, ends = content.count(BEGIN), content.count(END)
+    if begins == ends == 0:
+        return False
+    return begins != 1 or ends != 1 or content.find(END) < content.find(BEGIN)
 
 
 def replace_block(content: str, canonical: str) -> str:
@@ -241,8 +258,11 @@ def doctor(args: argparse.Namespace) -> int:
         problems.append(f"canonical policy unavailable: {exc}")
         canonical = ""
 
-    if canonical and extract_block(canonical) != canonical:
+    if canonical and (
+        markers_malformed(canonical) or extract_block(canonical) != canonical
+    ):
         problems.append("canonical policy does not contain exactly one managed block")
+        canonical = ""
 
     for target in BLOCK_TARGETS:
         try:
@@ -250,9 +270,16 @@ def doctor(args: argparse.Namespace) -> int:
         except OSError as exc:
             problems.append(f"unreadable global instruction file: {target}: {exc}")
             continue
+        if markers_malformed(content):
+            problems.append(f"malformed managed markers, fix by hand: {target}")
+            continue
         if canonical and extract_block(content) != canonical:
             if args.repair:
-                atomic_write(target, replace_block(content, canonical))
+                try:
+                    atomic_write(target, replace_block(content, canonical))
+                except OSError as exc:
+                    problems.append(f"cannot write {target}: {exc}")
+                    continue
                 repaired.append(str(target))
             else:
                 problems.append(f"managed policy drift: {target}")
@@ -269,7 +296,11 @@ def doctor(args: argparse.Namespace) -> int:
             actual = ""
         if actual != expected:
             if args.repair:
-                atomic_write(target, expected)
+                try:
+                    atomic_write(target, expected)
+                except OSError as exc:
+                    problems.append(f"cannot write {target}: {exc}")
+                    continue
                 repaired.append(str(target))
             else:
                 problems.append(f"managed profile drift: {target}")
