@@ -7,6 +7,7 @@ Reusable [Claude Code skills](https://docs.anthropic.com/en/docs/claude-code/ski
 | Skill | Description |
 |---|---|
 | [deliver](deliver/) | Shape outward text (reviews, comments, Slack asks, PR bodies, handoffs) for the reader it is going to. Adapted from [ayghri/i-have-adhd](https://github.com/ayghri/i-have-adhd) (MIT). |
+| [orchestration](orchestration/) | Install, health-check, and run the check-in for a manager-and-roles orchestration policy across Claude Code and Codex |
 | [pr-ready](pr-ready/) | Get a PR to a decision: hygiene, independent review, a defend-it briefing, and PR text, or a review kit for someone else's PR |
 
 ## Usage
