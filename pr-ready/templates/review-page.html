@@ -1,0 +1,473 @@
+<!--
+pr-ready page template. To build a page for a new PR: copy this file, replace every piece of 27703 content, keep the layout, tokens and script.
+Direction: inbound pages omit it; outbound pages add <meta name="pr-ready:direction" content="outbound"> next to <title>, which switches the check labels, the before-you-post flags, and the say-it-back prompt.
+Per hunk: <section class="hunk" id="hN" data-title data-file data-min [data-unfixed]> (data-unfixed marks an outbound hunk whose Blocking / Should fix is still open).
+Notes: a <tr class="inl"> directly after the <tr class="pin ..."> row it belongs to; the script lifts it into the margin on wide screens.
+Store: the page writes review/<pr> via the db capability; publish with capabilities {db:{}, user:{}}.
+-->
+<title>Review 27703</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a workspace. Rail left (map, order, progress). One hunk at a time in the middle. Notes live in the table as hidden rows and a script lifts each into the right margin at its line's offset, so code rows never stretch. Under 900px the notes stay inline. */
+:root{
+  --bg:#f7f8f6; --code:#ffffff; --ink:#1d2320; --muted:#6a746e; --line:#dfe4df; --rail:#f0f2ef;
+  --add:#e6f4e8; --add-fg:#1f5f2d; --del:#fbe8e6; --del-fg:#8a2b22;
+  --accent:#1f5f8b; --q:#b36b00; --ok:#2e6b3a; --nit:#6a746e;
+  --serif:"Source Serif 4",Georgia,"Times New Roman",serif;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --gl:max(16px,env(safe-area-inset-left,0px)); --gr:max(16px,env(safe-area-inset-right,0px));
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#141816; --code:#1a1f1c; --ink:#e4e8e4; --muted:#96a099; --line:#2c3430; --rail:#171c19;
+  --add:#1d3123; --add-fg:#8fd3a0; --del:#3a2220; --del-fg:#f0a39a;
+  --accent:#7fb6e0; --q:#e0a24a; --ok:#78c28a; --nit:#96a099; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#141816; --code:#1a1f1c; --ink:#e4e8e4; --muted:#96a099; --line:#2c3430; --rail:#171c19;
+  --add:#1d3123; --add-fg:#8fd3a0; --del:#3a2220; --del-fg:#f0a39a;
+  --accent:#7fb6e0; --q:#e0a24a; --ok:#78c28a; --nit:#96a099; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:16px/1.5 var(--serif);margin:0}
+a{color:var(--accent)}
+p{margin:0}
+code{font:.86em var(--mono)}
+.mono{font-family:var(--mono)}
+
+.top{display:flex;gap:6px 16px;align-items:baseline;flex-wrap:wrap;padding:12px var(--gr) 12px var(--gl);border-bottom:1px solid var(--line)}
+.top h1{font-size:1.1rem;font-weight:600;margin:0;min-width:0;text-wrap:balance}
+.top .meta{color:var(--muted);font:.78rem var(--mono)}
+
+.ws{display:grid;grid-template-columns:16rem minmax(0,1fr)}
+.rail{position:sticky;top:env(safe-area-inset-top,0px);align-self:start;max-height:100vh;overflow:auto;background:var(--rail);border-right:1px solid var(--line);padding:16px 14px 16px var(--gl);display:grid;gap:18px;align-content:start;font:.78rem/1.4 var(--mono)}
+.rail > *{min-width:0;overflow-wrap:anywhere}
+.rail h2{font-size:.66rem;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:0 0 6px;font-weight:500}
+.what{font:.98rem/1.4 var(--serif)}
+.chip{display:inline-block;border:1px solid var(--ok);border-radius:3px;padding:0 6px;font-size:.7rem;color:var(--ok);margin-top:6px}
+.edge{border-left:2px solid var(--q);padding:4px 8px;font:.9rem/1.4 var(--serif)}
+.outline{display:grid;gap:2px}
+.outline button{display:grid;grid-template-columns:1.2rem minmax(0,1fr);gap:6px;text-align:left;background:transparent;border:0;border-left:2px solid transparent;padding:4px 6px;color:var(--ink);font:inherit;cursor:pointer;overflow-wrap:anywhere}
+.outline button small{color:var(--muted);display:block}
+.outline button.cur{border-left-color:var(--accent);background:var(--code)}
+.outline button.hot .n{color:var(--q)}
+.outline button.ok .n{color:var(--ok)} .outline button.unsure .n{color:var(--q)} .outline button.no .n{color:var(--del-fg)}
+.outline button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.outline .n{font-weight:500}
+.bar{height:4px;background:var(--line);border-radius:2px;overflow:hidden;margin-bottom:4px}
+.bar i{display:block;height:100%;width:0;background:var(--ok);transition:width .2s}
+.toggle{font:500 .72rem var(--mono);background:transparent;color:var(--accent);border:1px solid var(--line);border-radius:3px;padding:3px 8px;cursor:pointer}
+
+.main{min-width:0;padding-bottom:48px}
+.hunk{border-bottom:1px solid var(--line)}
+.hhead{display:flex;gap:4px 14px;align-items:baseline;flex-wrap:wrap;padding:14px var(--gr) 6px 24px;font:.78rem var(--mono);color:var(--muted)}
+.hhead .n{color:var(--ink);font-weight:500}
+.hhead a{color:var(--ink);text-decoration:none;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+.hhead .why{font:italic 1rem/1.4 var(--serif);color:var(--muted);flex-basis:100%}
+
+.body{display:grid;grid-template-columns:minmax(0,1fr) clamp(17rem,26vw,24rem);border-top:1px solid var(--line);border-bottom:1px solid var(--line);align-items:start}
+table.d{border-collapse:collapse;width:100%;table-layout:fixed;font:.8rem/1.6 var(--mono);background:var(--code)}
+table.d td{vertical-align:top;padding:0}
+td.ln{width:4.5ch;text-align:right;color:var(--muted);user-select:none;padding-left:var(--gl)!important}
+td.s{width:2ch;color:var(--muted);user-select:none;text-align:center}
+td.c{white-space:pre-wrap;overflow-wrap:anywhere;padding:0 12px 0 6px!important}
+tr.a td{background:var(--add)} tr.a td.s,tr.a td.c{color:var(--add-fg)}
+tr.d td{background:var(--del)} tr.d td.s,tr.d td.c{color:var(--del-fg)}
+tr.gap td.c{color:var(--muted);font-style:italic}
+tr.pin td.ln{box-shadow:inset 3px 0 0 var(--q)}
+tr.pin.nit td.ln{box-shadow:inset 3px 0 0 var(--nit)}
+tr.pin.c td.ln{box-shadow:inset 3px 0 0 var(--accent)}
+tr.pin.info td.ln{box-shadow:inset 3px 0 0 var(--line)}
+tr.inl{display:none}
+.mg{position:relative;border-left:1px solid var(--line);min-height:100%;align-self:stretch}
+.mg .note{position:absolute;left:18px;right:var(--gr);padding-bottom:12px}
+.note{font:.92rem/1.4 var(--serif);display:grid;gap:8px}
+.note .sev{font:500 .68rem var(--mono);color:var(--q)}
+.note .sev.nit{color:var(--nit)} .note .sev.c{color:var(--accent)} .note .sev.info{color:var(--muted)}
+.note .aside{color:var(--muted)}
+.note .how{font:.72rem/1.4 var(--mono);color:var(--muted)}
+.draft{font:.76rem/1.5 var(--mono);background:var(--code);border:1px solid var(--line);border-radius:3px;padding:6px 8px;white-space:pre-wrap;overflow-wrap:anywhere;display:grid;gap:4px}
+.draft .row{display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;color:var(--muted);font-size:.68rem}
+button.copy,button.small{font:500 .7rem var(--mono);background:transparent;color:var(--accent);border:1px solid var(--accent);border-radius:3px;padding:2px 8px;cursor:pointer}
+button:disabled{opacity:.4;cursor:default}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+.hfoot{display:grid;gap:10px;padding:10px var(--gr) 14px 24px;font:.78rem var(--mono);color:var(--muted)}
+.hfoot .r1{display:flex;gap:10px 16px;align-items:center;flex-wrap:wrap}
+.hfoot .r2{display:flex;gap:10px 16px;align-items:center;flex-wrap:wrap;justify-content:space-between}
+.hfoot .r2 span{min-width:0;overflow-wrap:anywhere}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:4px;overflow:hidden;flex-wrap:wrap}
+.seg button{font:500 .74rem var(--mono);background:transparent;color:var(--muted);border:0;border-right:1px solid var(--line);padding:5px 10px;cursor:pointer}
+.seg button:last-child{border-right:0}
+.seg button[aria-pressed="true"]{color:#fff}
+.seg button[data-v="ok"][aria-pressed="true"]{background:var(--ok)}
+.seg button[data-v="unsure"][aria-pressed="true"]{background:var(--q)}
+.seg button[data-v="no"][aria-pressed="true"]{background:var(--del-fg)}
+.navs{display:flex;gap:8px}
+.hfoot textarea{min-height:3.4rem;font:.92rem/1.4 var(--serif)}
+.hfoot .nl{display:flex;justify-content:space-between;gap:8px;align-items:baseline;flex-wrap:wrap}
+.sync{font:.7rem var(--mono);color:var(--muted)}
+.upnext{display:none;padding:16px var(--gr) 16px 24px;font:.78rem var(--mono);color:var(--muted)}
+.upnext b{color:var(--ink);font-weight:500}
+.main.focus .upnext{display:block}
+
+.main.focus .hunk,.main.focus .end{display:none}
+.main.focus .hunk.on,.main.focus .end.on{display:block}
+
+.end{padding:20px var(--gr) 20px 24px;display:grid;gap:16px;max-width:56rem}
+.end h2{font:500 .68rem var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:0}
+.flag{border-left:2px solid var(--q);padding:6px 12px;display:grid;gap:4px}
+.flag.clear{border-color:var(--ok)}
+textarea{width:100%;min-height:5.5rem;font:1rem/1.45 var(--serif);color:var(--ink);background:var(--code);border:1px solid var(--line);border-radius:3px;padding:8px 10px;resize:vertical}
+textarea:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.mine{border-left:2px solid var(--accent);padding:4px 12px;color:var(--muted)}
+details{border-top:1px solid var(--line);padding-top:8px}
+details summary{cursor:pointer;color:var(--muted);font:.76rem var(--mono)}
+details > *:not(summary){margin-top:8px}
+table.v{border-collapse:collapse;width:100%;font:.9rem var(--serif)}
+table.v td{padding:4px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+.s-done{color:var(--ok)} .s-open{color:var(--q)}
+ul{margin:0;padding-left:1.2rem}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+
+@media (max-width:1200px){
+  .ws{grid-template-columns:1fr}
+  .rail{position:static;max-height:none;border-right:0;border-bottom:1px solid var(--line);padding-right:var(--gr);grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:14px 24px}
+  .hhead,.hfoot,.end,.upnext{padding-left:var(--gl)}
+}
+@media (max-width:900px){
+  .body{grid-template-columns:1fr}
+  .mg{display:none}
+  tr.inl{display:table-row}
+  tr.inl td{padding:8px 12px 10px calc(var(--gl) + 2ch)!important;background:var(--bg)}
+  tr.inl .note{max-width:44rem}
+}
+</style>
+
+<header class="top">
+  <h1>EX-3503 Restyle general, project and notifications settings</h1>
+  <span class="meta"><a href="https://github.com/netlify/netlify-react-ui/pull/27703">netlify-react-ui#27703</a> · jaredm563 · head 44ac919 · +112 −18 in 6 files · CI green</span>
+</header>
+
+<div class="ws">
+  <aside class="rail" aria-label="Map and progress">
+    <div>
+      <p class="what">Three settings groups get a Studio look by giving the shared settings page three optional props. Classic keeps the defaults.</p>
+      <span class="chip">approach: right</span>
+    </div>
+    <div class="edge">The question: the wrapper that scopes the new CSS is page-wide, so every settings group is restyled, not three. Intended, this is approve with nits.</div>
+    <div>
+      <h2>Read in this order · 10 min</h2>
+      <div class="outline">
+        <button type="button" data-go="h1" class="hot"><span class="n">1</span><span>StudioSiteSettingsPage.css<small>the selector scope · 2 min</small></span></button>
+        <button type="button" data-go="h2"><span class="n">2</span><span>StudioSiteSettingsPage.tsx<small>wrapper and header · 2 min</small></span></button>
+        <button type="button" data-go="h3"><span class="n">3</span><span>SiteSettingsPage.tsx<small>classic stays the same · 3 min</small></span></button>
+        <button type="button" data-go="h4"><span class="n">4</span><span>experience.tsx<small>the route list · 1 min</small></span></button>
+        <button type="button" data-go="h5"><span class="n">5</span><span>StudioSiteSettingsPage.spec.tsx<small>what tests cover · 2 min</small></span></button>
+        <button type="button" data-go="end"><span class="n">→</span><span>Post and say it back<small>4 min</small></span></button>
+      </div>
+    </div>
+    <div><div class="bar"><i id="bar"></i></div><span id="prog">0 of 5 settled</span></div>
+    <div><button type="button" class="toggle" id="mode">show all hunks</button></div>
+    <div><h2>Not shown</h2>SiteSettingsPage.tsx:1-9 import reorder · spec getTabs rename · experienceRoutes.spec test.each (named in 5)</div>
+    <div><h2>Checks</h2>eslint pass · stylelint pass · jest CI only · deploy preview not done</div>
+  </aside>
+
+  <main class="main">
+
+    <section class="hunk" id="h1" data-title="the selector scope" data-file="StudioSiteSettingsPage.css" data-min="2">
+      <div class="hhead"><span class="n">1</span><a href="https://github.com/netlify/netlify-react-ui/pull/27703/files#diff-1fcd1cd7aaecf032154d0084a7ef6a554a1d79aebff1a22de821fdb3decf3c0c">apps/netlify-react-ui/src/pages/Studio/StudioSiteSettingsPage.css</a><span>new file · 13 lines</span><span class="why">The whole review hangs on who is inside this selector.</span></div>
+      <div class="body"><table class="d">
+        <tr class="a"><td class="ln">1</td><td class="s">+</td><td class="c">/* Keeps the classic card padding and header spacing: `lists.css` and</td></tr>
+        <tr class="a"><td class="ln">2</td><td class="s">+</td><td class="c">   `settings.css` bleed rows and sticky headers by `spacing.card`. */</td></tr>
+        <tr class="a pin"><td class="ln">3</td><td class="s">+</td><td class="c">.studio-settings .card-settings .table-header {</td></tr>
+        <tr class="inl"><td colspan="3"><div class="note"><span class="sev">[q] · the question</span><p><code>.studio-settings</code> goes on the page container (2), and every <code>Settings.Panel</code> renders <code>.card-settings .table-header h3</code>. So this reaches Env vars and the URL-only groups like Build &amp; deploy, while the body says Env vars waits for EX-3504.</p><div class="draft"><div class="row"><span>inline at line 3</span><button type="button" class="copy">Copy</button></div><span class="txt">[q] `.studio-settings` is on the wrapper for every config group, so this also restyles the card headings on Env vars and the URL-only groups (Build &amp; deploy etc.). Intentional, or should it be limited to the three in this PR until EX-3504 lands?</span></div><p class="aside">Lines 4-6 remove the rule under the heading. Lines 8-12 are the 16px bold heading from the design. Card padding stays classic, which line 1 is about.</p><p class="how">how I know: traced Settings.Panel → .card-settings .table-header h3 in the repo. Not seen in a browser.</p></div></td></tr>
+        <tr class="a"><td class="ln">4</td><td class="s">+</td><td class="c">  &amp;::before {</td></tr>
+        <tr class="a"><td class="ln">5</td><td class="s">+</td><td class="c">    content: none;</td></tr>
+        <tr class="a"><td class="ln">6</td><td class="s">+</td><td class="c">  }</td></tr>
+        <tr class="a"><td class="ln">7</td><td class="s">+</td><td class="c"></td></tr>
+        <tr class="a"><td class="ln">8</td><td class="s">+</td><td class="c">  h3 {</td></tr>
+        <tr class="a"><td class="ln">9</td><td class="s">+</td><td class="c">    font-size: theme('fontSize.base');</td></tr>
+        <tr class="a"><td class="ln">10</td><td class="s">+</td><td class="c">    font-weight: theme('fontWeight.bold');</td></tr>
+        <tr class="a"><td class="ln">11</td><td class="s">+</td><td class="c">    color: theme('colors.textLoud');</td></tr>
+        <tr class="a"><td class="ln">12</td><td class="s">+</td><td class="c">  }</td></tr>
+        <tr class="a"><td class="ln">13</td><td class="s">+</td><td class="c">}</td></tr>
+      </table><div class="mg"></div></div>
+      <div class="hfoot" data-settle="To settle it: deploy preview, Studio, <code>/configuration/env</code>. New-style headings there means the question is real."></div>
+    </section>
+
+    <section class="hunk" id="h2" data-title="wrapper and header" data-file="StudioSiteSettingsPage.tsx" data-min="2">
+      <div class="hhead"><span class="n">2</span><a href="https://github.com/netlify/netlify-react-ui/pull/27703/files#diff-e79852959df5c5e2294eb0fee7a0efaac0c8fc8d044e68601b5a61a60030640d">apps/netlify-react-ui/src/pages/Studio/StudioSiteSettingsPage.tsx</a><span>lines 23-43</span><span class="why">Where the wrapper class and the new heading come from.</span></div>
+      <div class="body"><table class="d">
+        <tr class="a"><td class="ln">23</td><td class="s">+</td><td class="c">const STUDIO_SETTINGS_TITLE = 'Project settings';</td></tr>
+        <tr class="a"><td class="ln">24</td><td class="s">+</td><td class="c"></td></tr>
+        <tr class="a"><td class="ln">25</td><td class="s">+</td><td class="c">const StudioSettingsHeader = ({ site }: { site: Site }) =&gt; (</td></tr>
+        <tr class="a"><td class="ln">26</td><td class="s">+</td><td class="c">  &lt;header&gt;</td></tr>
+        <tr class="a pin nit"><td class="ln">27</td><td class="s">+</td><td class="c">    &lt;h1 className="tw-m-0 tw-text-2xl tw-font-bold tw-leading-tight tw-tracking-tight tw-text-textLoud"&gt;</td></tr>
+        <tr class="inl"><td colspan="3"><div class="note"><span class="sev nit">[nit]</span><p><code>StudioSiteOverviewPage</code> has the same layout with <code>tw-font-semibold</code> and <code>tw-mt-2</code>. Overview → settings shifts the title.</p><div class="draft"><div class="row"><span>inline at line 27</span><button type="button" class="copy">Copy</button></div><span class="txt">[nit] The overview page's h1 is `tw-font-semibold` with `tw-mt-2` on the subtitle, so going overview → settings shifts the title a bit. Match it to the design? Could be a shared Studio page header later.</span></div><p class="how">how I know: read both page files. Not seen side by side in a browser.</p></div></td></tr>
+        <tr class="a"><td class="ln">28</td><td class="s">+</td><td class="c">      {STUDIO_SETTINGS_TITLE}</td></tr>
+        <tr class="a"><td class="ln">29</td><td class="s">+</td><td class="c">    &lt;/h1&gt;</td></tr>
+        <tr class="a"><td class="ln">30</td><td class="s">+</td><td class="c">    &lt;p className="tw-m-0 tw-mt-1 tw-text-textMuted"&gt;{site.get('name')}&lt;/p&gt;</td></tr>
+        <tr class="a"><td class="ln">31</td><td class="s">+</td><td class="c">  &lt;/header&gt;</td></tr>
+        <tr class="a"><td class="ln">32</td><td class="s">+</td><td class="c">);</td></tr>
+        <tr class="gap"><td class="ln"></td><td class="s"></td><td class="c">…</td></tr>
+        <tr><td class="ln">36</td><td class="s"></td><td class="c">) =&gt; (</td></tr>
+        <tr class="a"><td class="ln">37</td><td class="s">+</td><td class="c">  &lt;SiteSettingsPage</td></tr>
+        <tr class="a"><td class="ln">38</td><td class="s">+</td><td class="c">    {...props}</td></tr>
+        <tr class="a"><td class="ln">39</td><td class="s">+</td><td class="c">    groups={STUDIO_SITE_SETTINGS_GROUPS}</td></tr>
+        <tr class="a"><td class="ln">40</td><td class="s">+</td><td class="c">    title={STUDIO_SETTINGS_TITLE}</td></tr>
+        <tr class="a pin info"><td class="ln">41</td><td class="s">+</td><td class="c">    className={cn('studio-settings', props.className)}</td></tr>
+        <tr class="inl"><td colspan="3"><div class="note"><span class="sev info">why 1 is page-wide</span><p>The wrapper lands on the page container. <code>props.site</code> is already required, so the header cannot render without it. <code>cn</code> drops an undefined <code>className</code>. The <code>&lt;header&gt;</code> sits inside <code>&lt;main&gt;</code>, so no second banner landmark.</p></div></td></tr>
+        <tr class="a"><td class="ln">42</td><td class="s">+</td><td class="c">    header={&lt;StudioSettingsHeader site={props.site} /&gt;}</td></tr>
+        <tr class="a"><td class="ln">43</td><td class="s">+</td><td class="c">  /&gt;</td></tr>
+      </table><div class="mg"></div></div>
+      <div class="hfoot"></div>
+    </section>
+
+    <section class="hunk" id="h3" data-title="classic stays the same" data-file="SiteSettingsPage.tsx" data-min="3">
+      <div class="hhead"><span class="n">3</span><a href="https://github.com/netlify/netlify-react-ui/pull/27703/files#diff-fc19cb7473c91857c6979bba2afc0775e27d8e024d471f1335ba80157f1c751e">apps/netlify-react-ui/src/pages/SiteSettingsPage.tsx</a><span>lines 323-353, 385-400</span><span class="why">"Classic unchanged" is checked by matching the new component against the deleted lines, not by reading the PR body.</span></div>
+      <div class="body"><table class="d">
+        <tr class="a"><td class="ln">323</td><td class="s">+</td><td class="c">const ClassicSettingsHeader = ({ site, title }: { site: Site; title: string }) =&gt; (</td></tr>
+        <tr class="a"><td class="ln">330</td><td class="s">+</td><td class="c">  &lt;&gt;</td></tr>
+        <tr class="a"><td class="ln">331</td><td class="s">+</td><td class="c">    &lt;Link subdued subduedUnderline={false} to={sitePath(site)} className="tw-flex tw-w-fit tw-items-center tw-gap-1 tw-text-sm"&gt;</td></tr>
+        <tr class="a"><td class="ln">337</td><td class="s">+</td><td class="c">      &lt;DecorativeIcon name="back-curly-arrow" width={12} height={12} /&gt;</td></tr>
+        <tr class="a"><td class="ln">338</td><td class="s">+</td><td class="c">      Project overview</td></tr>
+        <tr class="a"><td class="ln">339</td><td class="s">+</td><td class="c">    &lt;/Link&gt;</td></tr>
+        <tr class="a"><td class="ln">340</td><td class="s">+</td><td class="c">    &lt;h1 className="tw-mt-7"&gt;{title}&lt;/h1&gt;</td></tr>
+        <tr class="a"><td class="ln">341</td><td class="s">+</td><td class="c">  &lt;/&gt;</td></tr>
+        <tr class="gap"><td class="ln"></td><td class="s"></td><td class="c">…</td></tr>
+        <tr class="a"><td class="ln">348</td><td class="s">+</td><td class="c">  title = 'Project configuration',</td></tr>
+        <tr class="a"><td class="ln">349</td><td class="s">+</td><td class="c">  header,</td></tr>
+        <tr class="a pin nit"><td class="ln">350</td><td class="s">+</td><td class="c">  className,</td></tr>
+        <tr class="inl"><td colspan="3"><div class="note"><span class="sev nit">[nit][non-blocking]</span><p>With a custom <code>header</code>, <code>title</code> only feeds the nav label at 400. Two props to keep in sync.</p><div class="draft"><div class="row"><span>inline at line 350</span><button type="button" class="copy">Copy</button></div><span class="txt">[nit][non-blocking] With `header` passed, `title` only drives the nav label, so a caller has to keep both in sync. Fine for now; maybe the classic header could take `title` and callers pass one or the other.</span></div></div></td></tr>
+        <tr class="gap"><td class="ln"></td><td class="s"></td><td class="c">…</td></tr>
+        <tr class="d"><td class="ln"></td><td class="s">-</td><td class="c">    &lt;div className="container"&gt;</td></tr>
+        <tr class="a"><td class="ln">385</td><td class="s">+</td><td class="c">    &lt;div className={cn('container', className)}&gt;</td></tr>
+        <tr class="d pin info"><td class="ln"></td><td class="s">-</td><td class="c">      &lt;Link subdued subduedUnderline={false} to={sitePath(site)} className="tw-flex tw-w-fit tw-items-center tw-gap-1 tw-text-sm"&gt;</td></tr>
+        <tr class="inl"><td colspan="3"><div class="note"><span class="sev info">proof</span><p>These deleted lines against 331-340: same <code>Link</code> props, same icon, same <code>tw-mt-7</code>, same text via the default <code>title</code>. Classic renders the same markup.</p><p class="how">how I know: compared the two blocks token by token. No snapshot test confirms it.</p></div></td></tr>
+        <tr class="d"><td class="ln"></td><td class="s">-</td><td class="c">        &lt;DecorativeIcon name="back-curly-arrow" width={12} height={12} /&gt;</td></tr>
+        <tr class="d"><td class="ln"></td><td class="s">-</td><td class="c">        Project overview</td></tr>
+        <tr class="d"><td class="ln"></td><td class="s">-</td><td class="c">      &lt;/Link&gt;</td></tr>
+        <tr class="d"><td class="ln"></td><td class="s">-</td><td class="c">      &lt;h1 className="tw-mt-7"&gt;Project configuration&lt;/h1&gt;</td></tr>
+        <tr class="a"><td class="ln">387</td><td class="s">+</td><td class="c">      {header ?? &lt;ClassicSettingsHeader site={site} title={title} /&gt;}</td></tr>
+        <tr class="gap"><td class="ln"></td><td class="s"></td><td class="c">…</td></tr>
+        <tr class="d"><td class="ln"></td><td class="s">-</td><td class="c">        label="Project configuration"</td></tr>
+        <tr class="a"><td class="ln">400</td><td class="s">+</td><td class="c">        label={title}</td></tr>
+      </table><div class="mg"></div></div>
+      <div class="hfoot"></div>
+    </section>
+
+    <section class="hunk" id="h4" data-title="the route list" data-file="experience.tsx" data-min="1">
+      <div class="hhead"><span class="n">4</span><a href="https://github.com/netlify/netlify-react-ui/pull/27703/files#diff-fc88d9f54a74dc006505869960e7cb2bca88dcdf51daeff3c641af8e8e146ac2">apps/netlify-react-ui/src/routes/experience.tsx</a><span>lines 8-22</span><span class="why">Nothing to raise. Read it for the second meaning of this list.</span></div>
+      <div class="body"><table class="d">
+        <tr class="d"><td class="ln"></td><td class="s">-</td><td class="c"> * The screens that have a `studio` version. `experienceRoute` reads this list</td></tr>
+        <tr class="d"><td class="ln"></td><td class="s">-</td><td class="c"> * and renders the classic page for any screen that is not on it.</td></tr>
+        <tr class="a pin info"><td class="ln">9</td><td class="s">+</td><td class="c"> * The screens finished for `studio`. `experienceRoute` renders the classic</td></tr>
+        <tr class="inl"><td colspan="3"><div class="note"><span class="sev info">two meanings</span><p>For most screens this list gates rendering. For settings it only gates the analytics count, since every settings group already renders Studio. The rewritten comment says so, which is why there is nothing to leave.</p><p class="aside">Env vars is absent, matching the body. Pre-existing and skippable: NetliDev's switch links these to a literal <code>:name</code>.</p></div></td></tr>
+        <tr class="a"><td class="ln">10</td><td class="s">+</td><td class="c"> * page for a screen not on this list, and analytics counts a studio user on</td></tr>
+        <tr class="a"><td class="ln">11</td><td class="s">+</td><td class="c"> * one as seeing a classic screen. Settings groups always render the studio</td></tr>
+        <tr class="a"><td class="ln">12</td><td class="s">+</td><td class="c"> * version, so for them the list only drives that count.</td></tr>
+        <tr><td class="ln">17</td><td class="s"></td><td class="c">  ROUTES.SITES_AGENT_RUNNERS_ALL,</td></tr>
+        <tr class="a"><td class="ln">18</td><td class="s">+</td><td class="c">  ROUTES.SITES_CONFIGURATION_GENERAL,</td></tr>
+        <tr class="a"><td class="ln">19</td><td class="s">+</td><td class="c">  ROUTES.SITES_CONFIGURATION_PROJECT,</td></tr>
+        <tr class="a"><td class="ln">20</td><td class="s">+</td><td class="c">  ROUTES.SITES_CONFIGURATION_NOTIFICATIONS,</td></tr>
+      </table><div class="mg"></div></div>
+      <div class="hfoot"></div>
+    </section>
+
+    <section class="hunk" id="h5" data-title="what tests cover" data-file="StudioSiteSettingsPage.spec.tsx" data-min="2">
+      <div class="hhead"><span class="n">5</span><a href="https://github.com/netlify/netlify-react-ui/pull/27703/files#diff-db16bb058dce888f1cfe9bb8f66752268606b785dcae89abf4be86b179e498d6">apps/netlify-react-ui/src/pages/Studio/StudioSiteSettingsPage.spec.tsx</a><span>lines 65-82</span><span class="why">The tests prove the mechanism. The ticket also wants the look, in both themes.</span></div>
+      <div class="body"><table class="d">
+        <tr class="a pin c"><td class="ln">65</td><td class="s">+</td><td class="c">  it('shows the studio heading in place of the classic back link', () =&gt; {</td></tr>
+        <tr class="inl"><td colspan="3"><div class="note"><span class="sev c">[consider]</span><p>Heading, project name, no back link: covered. Nothing renders the page in light and dark, and this repo asks for a Snapshot story on customer-facing UI (norms, catch #6).</p><div class="draft"><div class="row"><span>inline at StudioSiteSettingsPage.tsx:25</span><button type="button" class="copy">Copy</button></div><span class="txt">[consider] Could we add a Snapshot story for the Studio settings page? It'd catch the heading or rule coming back if `lists.css`/`settings.css` change, in both themes.</span></div><p class="aside">Also: <code>experienceRoutes.spec.tsx:119</code>, a <code>test.each</code> that the three routes are Studio supported.</p><p class="how">how I know: no *.stories.tsx in the diff or next to the page. Jest ran in CI, not here.</p></div></td></tr>
+        <tr class="a"><td class="ln">72</td><td class="s">+</td><td class="c">    expect(screen.getByRole('heading', { name: 'Project settings', level: 1 })).toBeInTheDocument();</td></tr>
+        <tr class="a"><td class="ln">75</td><td class="s">+</td><td class="c">    expect(screen.getByText('Compatible with plugins site')).toBeInTheDocument();</td></tr>
+        <tr class="a"><td class="ln">78</td><td class="s">+</td><td class="c">    expect(screen.queryByRole('link', { name: 'Project overview' })).not.toBeInTheDocument();</td></tr>
+        <tr class="a"><td class="ln">79</td><td class="s">+</td><td class="c">  });</td></tr>
+      </table><div class="mg"></div></div>
+      <div class="hfoot"></div>
+    </section>
+
+    <div class="upnext" id="upnext"></div>
+
+    <section class="end" id="end">
+      <h2>Before you post</h2>
+      <div id="flags"></div>
+      <h2>Post</h2>
+      <div class="draft"><div class="row"><span>review body · comment, or approve after the [q]</span><button type="button" class="copy">Copy</button></div><span class="txt">Looks good, classic stays as-is. One [q] on the CSS scope; the rest are nits. I ran eslint and stylelint locally and relied on CI for Jest; I didn't click through the deploy preview.</span></div>
+      <p class="mono" style="font-size:.76rem;color:var(--muted)">Then the four inline comments: 1, 2, 3, 5. About 2 minutes, plus the deploy preview check from 1.</p>
+
+      <h2>Notes for Claude</h2>
+      <p class="mono" style="font-size:.76rem;color:var(--muted)">Anything about the whole review: the shape, what was missing, what to do differently next time. Saved to this page; I read it with the per-hunk notes.</p>
+      <textarea id="note-end" placeholder="Overall…"></textarea>
+
+      <h2>Say it back</h2>
+      <p id="say-prompt">Three sentences: what this PR does, what the one question is, what the tests do and do not cover. Write them before you look at mine.</p>
+      <textarea id="say" placeholder="This PR…"></textarea>
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center"><span class="mono" style="font-size:.72rem;color:var(--muted)" id="say-state">saved to this page</span><button type="button" class="small" id="reveal">Compare</button></div>
+      <div class="mine" id="mine" hidden>Adds optional <code>title</code>, <code>header</code>, <code>className</code> props to the shared settings page so Studio can restyle three groups without touching classic. The question is whether the page-wide wrapper restyling every group's headings was meant. Tests cover the heading and the route list, not the look in either theme.</div>
+
+      <details><summary>ticket EX-3503</summary>
+        <table class="v">
+          <tr><td>Three groups restyled for Studio</td><td class="s-done">done</td></tr>
+          <tr><td>Classic unchanged</td><td class="s-done">done, 3</td></tr>
+          <tr><td>Logic and data unchanged</td><td class="s-done">done</td></tr>
+          <tr><td>Matches design, light and dark</td><td class="s-open">not verifiable from the diff</td></tr>
+          <tr><td>Saving still works</td><td class="s-open">not verifiable from the diff</td></tr>
+        </table>
+      </details>
+      <details><summary>provenance and norms</summary>
+        <ul>
+          <li>[q]: mine, confirmed by /code-review. Nits and [consider]: /code-review. [consider] matches review-norms catch #6.</li>
+          <li>This repo approves with nits and requests changes only for a found bug. Substance inline with bracket prefixes; one-line body saying what was run. Norms dated 2026-09-14.</li>
+          <li>Excerpts from head 44ac919, 2026-10-20. Calibration for this repo: no merged reviews checked yet.</li>
+        </ul>
+      </details>
+    </section>
+  </main>
+</div>
+
+<script>
+(function(){
+  var KEY='review-27703', state={st:{},notes:{},say:'',cur:'h1',focus:true};
+  try{var s=JSON.parse(localStorage.getItem(KEY));if(s&&s.st)state=s;}catch(e){}
+  if(!state.notes)state.notes={};
+  // Shared store: what Claude reads back next session (states, notes, say-it-back). Browser storage is the fallback.
+  var ref=null, pushT=null, syncEls=[];
+  function setSync(t){syncEls.forEach(function(e){e.textContent=t})}
+  function save(){
+    try{localStorage.setItem(KEY,JSON.stringify(state))}catch(e){}
+    if(!ref)return;
+    clearTimeout(pushT);
+    pushT=setTimeout(function(){
+      ref.set({pr:'netlify/netlify-react-ui#27703',head:'44ac919',states:state.st,notes:state.notes,say:state.say,updated:new Date().toISOString()})
+        .then(function(){setSync('saved to this page '+new Date().toLocaleTimeString())},function(){setSync('not saved to the page, kept in this browser')});
+    },800);
+  }
+  if(window.claude&&claude.use){claude.use('db').then(function(db){
+    if(!db){setSync('kept in this browser only');return;}
+    ref=db.doc('review/27703');
+    return ref.get().then(function(snap){
+      if(snap.exists){var d=snap.data(); state.st=d.states||state.st; state.notes=d.notes||state.notes; state.say=d.say||state.say; fill(); paint();}
+      setSync('saved to this page');
+    });
+  }).catch(function(){setSync('kept in this browser only')});}
+  var hunks=Array.prototype.slice.call(document.querySelectorAll('.hunk')), n=hunks.length;
+  var end=document.getElementById('end'), all=hunks.concat([end]);
+  var items=document.querySelectorAll('.outline button'), main=document.querySelector('.main');
+  var dirMeta=document.querySelector('meta[name="pr-ready:direction"]');
+  var OUT=!!dirMeta&&dirMeta.content==='outbound';
+  var LABELS=OUT?{ok:'I could defend this',unsure:'Not sure I could defend it',no:"I'd change this before posting"}
+                :{ok:'I could explain this',unsure:'Read it, not sure I could',no:'I disagree with the note'};
+
+  // Footer per hunk: comfort check, settle hint, Back / Next.
+  hunks.forEach(function(h,i){
+    var foot=h.querySelector('.hfoot');
+    var r1=document.createElement('div'); r1.className='r1';
+    var seg=document.createElement('div'); seg.className='seg'; seg.setAttribute('role','group'); seg.setAttribute('aria-label','How do you feel about hunk '+(i+1));
+    ['ok','unsure','no'].forEach(function(v){
+      var b=document.createElement('button'); b.type='button'; b.dataset.v=v; b.textContent=LABELS[v];
+      b.addEventListener('click',function(){state.st[h.id]=(state.st[h.id]===v?null:v);save();paint();});
+      seg.appendChild(b);
+    });
+    r1.appendChild(seg); foot.appendChild(r1);
+    var r2=document.createElement('div'); r2.className='r2';
+    var hint=document.createElement('span'); hint.innerHTML=foot.dataset.settle||''; r2.appendChild(hint);
+    var nav=document.createElement('div'); nav.className='navs';
+    var back=document.createElement('button'); back.type='button'; back.className='small'; back.textContent='Back'; back.disabled=i===0;
+    back.addEventListener('click',function(){go(hunks[i-1].id)});
+    var next=document.createElement('button'); next.type='button'; next.className='small'; next.textContent=i===n-1?'Finish':'Next';
+    next.addEventListener('click',function(){if(!state.st[h.id])state.st[h.id]='ok'; go(i===n-1?'end':hunks[i+1].id);});
+    nav.appendChild(back); nav.appendChild(next); r2.appendChild(nav);
+    var nl=document.createElement('div'); nl.className='nl';
+    var lab=document.createElement('label'); lab.htmlFor='note-'+h.id; lab.textContent='Notes for Claude';
+    var sy=document.createElement('span'); sy.className='sync'; syncEls.push(sy);
+    nl.appendChild(lab); nl.appendChild(sy);
+    var ta=document.createElement('textarea'); ta.id='note-'+h.id; ta.dataset.note=h.id;
+    ta.placeholder='What confused you, what you would push back on, what to re-check. Short is fine.';
+    ta.addEventListener('input',function(){state.notes[h.id]=ta.value;save();});
+    foot.appendChild(nl); foot.appendChild(ta); foot.appendChild(r2);
+  });
+  var endNote=document.getElementById('note-end');
+  endNote.addEventListener('input',function(){state.notes.end=endNote.value;save();});
+  function fill(){
+    document.querySelectorAll('textarea[data-note]').forEach(function(t){t.value=state.notes[t.dataset.note]||''});
+    endNote.value=state.notes.end||''; say.value=state.say||'';
+  }
+
+  // Margin notes: lift each inline note beside its pinned row, stacking so they never overlap.
+  function layout(){
+    if(window.innerWidth<=900)return;
+    hunks.forEach(function(h){
+      if(h.offsetParent===null)return;
+      var mg=h.querySelector('.mg'), tbl=h.querySelector('table.d');
+      mg.innerHTML='';
+      var floor=0;
+      h.querySelectorAll('tr.inl').forEach(function(tr){
+        var pin=tr.previousElementSibling, src=tr.querySelector('.note');
+        var note=src.cloneNode(true);
+        var top=Math.max(pin.offsetTop,floor);
+        note.style.top=top+'px'; mg.appendChild(note);
+        floor=top+note.offsetHeight;
+      });
+      mg.style.minHeight=Math.max(tbl.offsetHeight,floor)+'px';
+    });
+  }
+
+  function go(id){state.cur=id;save();paint();
+    if(!state.focus){var t=document.getElementById(id);if(t)t.scrollIntoView({behavior:'smooth',block:'start'});}
+    else window.scrollTo({top:0,behavior:'smooth'});}
+  function paint(){
+    var c=0, unsure=[], no=[];
+    hunks.forEach(function(h){var v=state.st[h.id]; if(v)c++; if(v==='unsure')unsure.push(h); if(v==='no')no.push(h);
+      h.querySelectorAll('.seg button').forEach(function(b){b.setAttribute('aria-pressed',String(v===b.dataset.v))});});
+    items.forEach(function(it){var v=state.st[it.dataset.go]; it.className=(v||'')+(it.dataset.go===state.cur?' cur':'')+(it.dataset.go==='h1'?' hot':'');});
+    document.getElementById('prog').textContent=c+' of '+n+' settled'+(unsure.length?' · '+unsure.length+' unsure':'')+(no.length?' · '+no.length+' disputed':'');
+    document.getElementById('bar').style.width=(100*c/n)+'%';
+    main.classList.toggle('focus',state.focus);
+    all.forEach(function(h){h.classList.toggle('on',h.id===state.cur)});
+    document.getElementById('mode').textContent=state.focus?'show all hunks':'one hunk at a time';
+    var i=hunks.findIndex(function(h){return h.id===state.cur}), up=document.getElementById('upnext');
+    if(state.focus&&i>-1){var nx=hunks[i+1]; up.innerHTML=nx?'Up next · <b>'+(i+2)+' '+nx.dataset.file+'</b> · '+nx.dataset.title+' · '+nx.dataset.min+' min':'Up next · <b>Post and say it back</b> · 4 min'; up.style.display='block';} else up.style.display='none';
+    var f=document.getElementById('flags'), html='';
+    if(c<n){html+='<div class="flag"><b>'+(n-c)+' hunk'+(n-c>1?'s':'')+' not settled.</b><span>Posting now means approving code you have not looked at.</span></div>';}
+    var unfixed=document.querySelectorAll('.hunk[data-unfixed]');
+    if(OUT&&unfixed.length){html+='<div class="flag"><b>'+unfixed.length+' finding'+(unfixed.length>1?'s':'')+' not fixed yet.</b><span>Blocking or should-fix items are still open. Fix them or move them into the body as an honest sentence before posting.</span></div>';}
+    no.forEach(function(h){html+=OUT
+      ?'<div class="flag"><b>You want to change '+h.id.slice(1)+', '+h.dataset.title+', before posting.</b><span>Do not post yet. In the terminal: "pr-ready, change '+h.id.slice(1)+'" and say what; I will propose it, apply it after your yes, and redeploy this page.</span></div>'
+      :'<div class="flag"><b>You disagree with '+h.id.slice(1)+', '+h.dataset.title+'.</b><span>Do not post that comment. In the terminal: "pr-ready, I disagree with '+h.id.slice(1)+'" and say why; I will defend it or drop it.</span></div>';});
+    unsure.forEach(function(h){html+='<div class="flag"><b>'+h.id.slice(1)+', '+h.dataset.title+': '+(OUT?'not sure you could defend it.':'read, not sure.')+'</b><span>Ask me one question about it before posting. In the terminal: "pr-ready, explain '+h.id.slice(1)+'".</span></div>';});
+    if(c===n&&!no.length&&!unsure.length&&!(OUT&&unfixed.length)){html='<div class="flag clear"><b>All '+n+' settled'+(OUT?', nothing to change.':', none disputed.')+'</b><span>'+(OUT?'Post the PR, then write it back below.':'Post, then write it back below.')+'</span></div>';}
+    f.innerHTML=html;
+    layout();
+  }
+  document.getElementById('mode').addEventListener('click',function(){state.focus=!state.focus;save();paint();});
+  window.addEventListener('resize',layout);
+  if(document.fonts&&document.fonts.ready)document.fonts.ready.then(layout);
+  if('IntersectionObserver' in window){
+    var vis={};
+    var io=new IntersectionObserver(function(es){
+      if(state.focus)return;
+      es.forEach(function(e){vis[e.target.id]=e.intersectionRatio});
+      var best=null,br=0; all.forEach(function(h){if((vis[h.id]||0)>br){br=vis[h.id];best=h.id}});
+      if(best){state.cur=best;items.forEach(function(it){it.classList.toggle('cur',it.dataset.go===best)});}
+    },{threshold:[0,.2,.4,.6,.8,1]});
+    all.forEach(function(h){io.observe(h)});
+  }
+  items.forEach(function(it){it.addEventListener('click',function(){go(it.dataset.go)})});
+  var say=document.getElementById('say'), mine=document.getElementById('mine'), st=document.getElementById('say-state');
+  syncEls.push(st); fill();
+  if(OUT)document.getElementById('say-prompt').textContent='Two sentences: what this PR does, and why this way. They become the first lines of the body. Write them before you look at mine.';
+  say.addEventListener('input',function(){state.say=say.value;save();});
+  document.getElementById('reveal').addEventListener('click',function(){
+    if(say.value.trim().length<40){st.textContent='write it first, then compare';say.focus();return;}
+    mine.hidden=false;
+  });
+  document.addEventListener('click',function(ev){
+    var b=ev.target.closest('button.copy'); if(!b)return;
+    var el=b.closest('.draft').querySelector('.txt'), t=el.textContent;
+    var done=function(){b.textContent='Copied';setTimeout(function(){b.textContent='Copy'},1500)};
+    var fallback=function(){var r=document.createRange();r.selectNodeContents(el);var s=getSelection();s.removeAllRanges();s.addRange(r);b.textContent='Selected';};
+    try{navigator.clipboard.writeText(t).then(done,fallback)}catch(e){fallback()}
+  });
+  paint();
+})();
+</script>
